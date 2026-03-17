@@ -1,7 +1,7 @@
 'use server'
 
-import { createServerSupabaseClient } from '@/lib/supabase/server'
-import { isResendConfigured } from '@/lib/resend/client'
+import { createServerSupabaseClient, createServiceRoleClient } from '@/lib/supabase/server'
+import { sendEmail, interpolateTemplate, isResendConfigured } from '@/lib/resend/client'
 import { revalidatePath } from 'next/cache'
 
 interface ActionResult {
@@ -61,6 +61,7 @@ export async function createEmailCampaign(input: CreateCampaignInput): Promise<A
 
 export async function sendEmailCampaign(campaignId: string): Promise<ActionResult & { sent?: number; failed?: number; simulated?: boolean }> {
   const supabase = await createServerSupabaseClient()
+  const serviceClient = await createServiceRoleClient()
 
   // Fetch campaign + template
   const { data: campaign, error: campaignErr } = await supabase
@@ -109,41 +110,67 @@ export async function sendEmailCampaign(campaignId: string): Promise<ActionResul
   }
 
   // Mark as sending
-  await supabase.from('email_campaigns').update({
+  await serviceClient.from('email_campaigns').update({
     status: 'sending',
     started_at: new Date().toISOString(),
     total_recipients: contacts.length,
   }).eq('id', campaignId)
 
-  // Insert queue rows
-  const queueRows = contacts.map((c) => ({
-    email_campaign_id: campaignId,
-    contact_id: c.id,
-    email: c.email!,
-    contact_name: c.name,
-    variables: { name: c.name, email: c.email },
-    status: 'pending' as const,
-  }))
+  // Send emails directly (no background job - Vercel serverless compatible)
+  let totalSent = 0
+  let totalFailed = 0
 
-  await supabase.from('email_queue').insert(queueRows)
+  for (const contact of contacts) {
+    const vars = { name: contact.name ?? '', email: contact.email ?? '' }
+    const html = interpolateTemplate(template.html_body ?? '', vars)
+    const subject = interpolateTemplate(template.subject ?? '', vars)
 
-  // Fire-and-forget: delegate to background job route
-  const jobSecret = process.env.JOB_SECRET || process.env.ENCRYPTION_KEY
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+    const result = await sendEmail({
+      from: `${campaign.from_name} <${campaign.from_email}>`,
+      to: [contact.email!],
+      subject,
+      html,
+      reply_to: campaign.reply_to ?? undefined,
+      tags: [{ name: 'campaign_id', value: campaignId }],
+    })
 
-  fetch(`${baseUrl}/api/jobs/send-email-campaign`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-job-secret': jobSecret ?? '',
-    },
-    body: JSON.stringify({ campaignId }),
-  }).catch((err) => {
-    console.error('[sendEmailCampaign] Failed to dispatch job:', err)
-  })
+    if (result.error) {
+      totalFailed++
+      // Log to email_queue for tracking
+      await serviceClient.from('email_queue').insert({
+        email_campaign_id: campaignId,
+        contact_id: contact.id,
+        email: contact.email!,
+        contact_name: contact.name,
+        status: 'failed',
+        failed_reason: result.error,
+        attempts: 1,
+      })
+    } else {
+      totalSent++
+      await serviceClient.from('email_queue').insert({
+        email_campaign_id: campaignId,
+        contact_id: contact.id,
+        email: contact.email!,
+        contact_name: contact.name,
+        status: 'sent',
+        resend_email_id: result.id ?? null,
+        sent_at: new Date().toISOString(),
+        attempts: 1,
+      })
+    }
+  }
+
+  // Update campaign as completed
+  await serviceClient.from('email_campaigns').update({
+    status: 'completed',
+    completed_at: new Date().toISOString(),
+    total_sent: totalSent,
+    total_failed: totalFailed,
+  }).eq('id', campaignId)
 
   revalidatePath('/email')
-  return { success: true, simulated: !isResendConfigured() }
+  return { success: true, sent: totalSent, failed: totalFailed, simulated: !isResendConfigured() }
 }
 
 export async function deleteEmailCampaign(id: string): Promise<ActionResult> {
