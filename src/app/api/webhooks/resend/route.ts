@@ -164,6 +164,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Store raw event for auditing
+  // @ts-expect-error - email_events table exists in DB but not in generated types
   await supabase.from('email_events').insert({
     resend_email_id: resendEmailId,
     event_type: event.type,
