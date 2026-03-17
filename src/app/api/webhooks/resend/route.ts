@@ -82,6 +82,7 @@ export async function POST(request: NextRequest) {
         .single()
 
       if (queueRow?.email_campaign_id) {
+        // @ts-expect-error - RPC function exists in DB but not in generated types
         await supabase.rpc('increment_email_campaign_stat', {
           p_campaign_id: queueRow.email_campaign_id,
           p_field: 'total_opened',
@@ -104,6 +105,7 @@ export async function POST(request: NextRequest) {
         .single()
 
       if (queueRow?.email_campaign_id) {
+        // @ts-expect-error - RPC function exists in DB but not in generated types
         await supabase.rpc('increment_email_campaign_stat', {
           p_campaign_id: queueRow.email_campaign_id,
           p_field: 'total_clicked',
@@ -125,6 +127,7 @@ export async function POST(request: NextRequest) {
         .single()
 
       if (queueRow?.email_campaign_id) {
+        // @ts-expect-error - RPC function exists in DB but not in generated types
         await supabase.rpc('increment_email_campaign_stat', {
           p_campaign_id: queueRow.email_campaign_id,
           p_field: 'total_bounced',
