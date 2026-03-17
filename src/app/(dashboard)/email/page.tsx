@@ -90,7 +90,7 @@ export default async function EmailMarketingPage() {
         <h2 className="text-sm font-semibold text-[#737373] uppercase tracking-wider mb-4">
           Campanhas Recentes
         </h2>
-        <EmailCampaignsList campaigns={campaigns as Array<Record<string, unknown>>} />
+        <EmailCampaignsList campaigns={campaigns as unknown as Array<{id: string; name: string; status: string; from_email: string; total_recipients: number; total_sent: number; total_opened: number; total_clicked: number; total_failed: number; created_at: string; email_templates: { name: string; subject: string } | null}>} />
       </div>
     </div>
   )
