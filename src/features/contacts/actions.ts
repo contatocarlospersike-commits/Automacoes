@@ -147,6 +147,24 @@ export async function softDeleteContact(id: string): Promise<ActionResult> {
   return { success: true }
 }
 
+export async function softDeleteContacts(ids: string[]): Promise<ActionResult & { deleted: number }> {
+  if (ids.length === 0) return { success: false, error: 'Nenhum contato selecionado', deleted: 0 }
+
+  const supabase = await createServerSupabaseClient()
+
+  const { error, count } = await supabase
+    .from('contacts')
+    .update({ deleted_at: new Date().toISOString() })
+    .in('id', ids)
+
+  if (error) {
+    return { success: false, error: error.message, deleted: 0 }
+  }
+
+  revalidatePath('/contacts')
+  return { success: true, deleted: count ?? ids.length }
+}
+
 interface ImportResult {
   imported: number
   duplicates: number
