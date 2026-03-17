@@ -90,9 +90,9 @@ export function EmailCampaignWizard({ templates, groups, tags, totalContacts }: 
       }
 
       if (sendResult.simulated) {
-        toast.success(`Simulado! ${sendResult.sent} email(s) — configure RESEND_API_KEY para envio real.`)
+        toast.success('Campanha simulada! Configure RESEND_API_KEY para envio real.')
       } else {
-        toast.success(`Campanha enviada! ${sendResult.sent} enviados, ${sendResult.failed} falhas.`)
+        toast.success('Campanha enviada! Os emails estao sendo processados em segundo plano.')
       }
 
       router.push('/email')
