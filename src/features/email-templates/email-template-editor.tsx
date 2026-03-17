@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition, useRef, useCallback } from 'react'
+import { useState, useTransition, useRef, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,7 +11,7 @@ import {
   Save, Eye, EyeOff, Loader2, Bold, Italic, Strikethrough,
   Underline, AlignLeft, AlignCenter, AlignRight, List, ListOrdered,
   Link, Type, Variable, Heading1, Heading2, Minus, Undo, Redo,
-  Plus, X
+  Plus, X, Pencil, Check
 } from 'lucide-react'
 import { createEmailTemplate, updateEmailTemplate } from '@/features/email-templates/actions'
 import { extractVariables } from '@/lib/resend/client'
@@ -23,11 +23,12 @@ interface EmailTemplateEditorProps {
   template?: EmailTemplate
 }
 
-const DEFAULT_VARIABLES = [
-  { key: 'name', label: 'Nome', builtin: true },
-  { key: 'email', label: 'Email', builtin: true },
-  { key: 'phone', label: 'Telefone', builtin: true },
-]
+interface VariableItem {
+  key: string
+  label: string
+  value: string
+  builtin: boolean
+}
 
 function wrapInEmailLayout(bodyHtml: string): string {
   return `<!DOCTYPE html>
@@ -71,7 +72,6 @@ const DEFAULT_BODY = `<h1>Ola, {{name}}!</h1>
 <a href="#" class="btn">Chamar para Acao</a>`
 
 function extractBodyFromHtml(fullHtml: string): string {
-  // Extract content between logo div and footer div
   const logoEnd = fullHtml.indexOf('</div>', fullHtml.indexOf('class="logo"'))
   const footerStart = fullHtml.indexOf('<div class="footer">')
   const cardEnd = fullHtml.lastIndexOf('</div>', footerStart)
@@ -88,6 +88,8 @@ export function EmailTemplateEditor({ template }: EmailTemplateEditorProps) {
   const [isPending, startTransition] = useTransition()
   const [showPreview, setShowPreview] = useState(false)
   const editorRef = useRef<HTMLDivElement>(null)
+  const bodyHtmlRef = useRef<string>('')
+  const editorInitialized = useRef(false)
 
   const [name, setName] = useState(template?.name ?? '')
   const [subject, setSubject] = useState(template?.subject ?? '')
@@ -96,68 +98,111 @@ export function EmailTemplateEditor({ template }: EmailTemplateEditorProps) {
 
   const existingBody = template?.html_body ? extractBodyFromHtml(template.html_body) : DEFAULT_BODY
   const [bodyHtml, setBodyHtml] = useState(existingBody)
-  const [customVars, setCustomVars] = useState<Array<{ key: string; label: string }>>([])
+
+  // Variables with editable values
+  const [variables, setVariables] = useState<VariableItem[]>([
+    { key: 'name', label: 'Nome do contato', value: '', builtin: true },
+    { key: 'email', label: 'Email do contato', value: '', builtin: true },
+    { key: 'phone', label: 'Telefone do contato', value: '', builtin: true },
+  ])
   const [newVarKey, setNewVarKey] = useState('')
   const [newVarLabel, setNewVarLabel] = useState('')
+  const [newVarValue, setNewVarValue] = useState('')
   const [showAddVar, setShowAddVar] = useState(false)
-
-  const allVariables = [...DEFAULT_VARIABLES, ...customVars.map(v => ({ ...v, builtin: false }))]
+  const [editingVar, setEditingVar] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState('')
 
   const fullHtml = wrapInEmailLayout(bodyHtml)
   const detectedVars = extractVariables(fullHtml)
 
+  // Initialize editor content only once
+  useEffect(() => {
+    if (editorRef.current && !editorInitialized.current) {
+      editorRef.current.innerHTML = existingBody
+      bodyHtmlRef.current = existingBody
+      editorInitialized.current = true
+    }
+  }, [existingBody])
+
+  const syncEditorToState = useCallback(() => {
+    if (editorRef.current) {
+      const html = editorRef.current.innerHTML
+      bodyHtmlRef.current = html
+      setBodyHtml(html)
+    }
+  }, [])
+
+  const execCommand = useCallback((command: string, value?: string) => {
+    // Save selection before executing command
+    document.execCommand(command, false, value)
+    syncEditorToState()
+  }, [syncEditorToState])
+
+  const insertVariable = useCallback((varKey: string) => {
+    if (!editorRef.current) return
+    editorRef.current.focus()
+
+    const sel = window.getSelection()
+    if (sel && sel.rangeCount > 0) {
+      const range = sel.getRangeAt(0)
+      // Check selection is inside editor
+      if (!editorRef.current.contains(range.commonAncestorContainer)) {
+        // If not inside editor, place at end
+        const newRange = document.createRange()
+        newRange.selectNodeContents(editorRef.current)
+        newRange.collapse(false)
+        sel.removeAllRanges()
+        sel.addRange(newRange)
+      }
+    }
+
+    document.execCommand('insertText', false, `{{${varKey}}}`)
+    syncEditorToState()
+  }, [syncEditorToState])
+
   const addCustomVariable = useCallback(() => {
     const key = newVarKey.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
     const label = newVarLabel.trim()
+    const value = newVarValue.trim()
     if (!key) {
       toast.error('Preencha o identificador da variavel')
       return
     }
-    if (allVariables.find(v => v.key === key)) {
+    if (variables.find(v => v.key === key)) {
       toast.error('Essa variavel ja existe')
       return
     }
-    setCustomVars(prev => [...prev, { key, label: label || key }])
+    setVariables(prev => [...prev, { key, label: label || key, value, builtin: false }])
     setNewVarKey('')
     setNewVarLabel('')
+    setNewVarValue('')
     setShowAddVar(false)
     toast.success(`Variavel {{${key}}} criada`)
-  }, [newVarKey, newVarLabel, allVariables])
+  }, [newVarKey, newVarLabel, newVarValue, variables])
 
-  const removeCustomVariable = useCallback((key: string) => {
-    setCustomVars(prev => prev.filter(v => v.key !== key))
+  const removeVariable = useCallback((key: string) => {
+    setVariables(prev => prev.filter(v => v.key !== key))
     toast.success(`Variavel {{${key}}} removida`)
   }, [])
 
-  const execCommand = useCallback((command: string, value?: string) => {
-    document.execCommand(command, false, value)
-    editorRef.current?.focus()
-    // Update state from editor content
-    if (editorRef.current) {
-      setBodyHtml(editorRef.current.innerHTML)
+  const startEditingVar = useCallback((key: string) => {
+    const v = variables.find(v => v.key === key)
+    if (v) {
+      setEditingVar(key)
+      setEditValue(v.value)
     }
-  }, [])
+  }, [variables])
 
-  const insertVariable = useCallback((varKey: string) => {
-    const sel = window.getSelection()
-    if (sel && sel.rangeCount > 0) {
-      const range = sel.getRangeAt(0)
-      const varSpan = document.createElement('span')
-      varSpan.style.cssText = 'background: #7C3AED22; color: #A78BFA; padding: 2px 6px; border-radius: 4px; font-weight: 600;'
-      varSpan.contentEditable = 'false'
-      varSpan.textContent = `{{${varKey}}}`
-      range.deleteContents()
-      range.insertNode(varSpan)
-      // Move cursor after the variable
-      range.setStartAfter(varSpan)
-      range.collapse(true)
-      sel.removeAllRanges()
-      sel.addRange(range)
+  const saveVarEdit = useCallback(() => {
+    if (editingVar) {
+      setVariables(prev => prev.map(v =>
+        v.key === editingVar ? { ...v, value: editValue.trim() } : v
+      ))
+      setEditingVar(null)
+      setEditValue('')
+      toast.success('Valor atualizado')
     }
-    if (editorRef.current) {
-      setBodyHtml(editorRef.current.innerHTML)
-    }
-  }, [])
+  }, [editingVar, editValue])
 
   const insertLink = useCallback(() => {
     const url = prompt('URL do link:')
@@ -171,15 +216,10 @@ export function EmailTemplateEditor({ template }: EmailTemplateEditorProps) {
     const text = prompt('Texto do botao:', 'Clique Aqui')
     if (url && text) {
       const buttonHtml = `<a href="${url}" class="btn" style="display: inline-block; background: linear-gradient(135deg, #7C3AED, #8B5CF6); color: #FAFAFA; text-decoration: none; padding: 14px 28px; border-radius: 8px; font-weight: 600; font-size: 16px; margin: 24px 0;">${text}</a>`
-      execCommand('insertHTML', buttonHtml)
+      document.execCommand('insertHTML', false, buttonHtml)
+      syncEditorToState()
     }
-  }, [execCommand])
-
-  const handleEditorInput = useCallback(() => {
-    if (editorRef.current) {
-      setBodyHtml(editorRef.current.innerHTML)
-    }
-  }, [])
+  }, [syncEditorToState])
 
   const handleSave = () => {
     if (!name.trim() || !subject.trim()) {
@@ -187,8 +227,12 @@ export function EmailTemplateEditor({ template }: EmailTemplateEditorProps) {
       return
     }
 
+    // Get latest content from editor
+    const currentBody = bodyHtmlRef.current || bodyHtml
+    const finalHtml = wrapInEmailLayout(currentBody)
+
     startTransition(async () => {
-      const input = { name, subject, from_name: fromName, html_body: fullHtml, preview_text: previewText }
+      const input = { name, subject, from_name: fromName, html_body: finalHtml, preview_text: previewText }
       const result = template
         ? await updateEmailTemplate(template.id, input)
         : await createEmailTemplate(input)
@@ -202,12 +246,15 @@ export function EmailTemplateEditor({ template }: EmailTemplateEditorProps) {
     })
   }
 
-  const ToolbarButton = ({ onClick, active, title, children }: { onClick: () => void; active?: boolean; title: string; children: React.ReactNode }) => (
+  const ToolbarButton = ({ onClick, title, children }: { onClick: () => void; title: string; children: React.ReactNode }) => (
     <button
       type="button"
-      onClick={onClick}
+      onMouseDown={(e) => {
+        e.preventDefault() // Prevent editor losing focus
+        onClick()
+      }}
       title={title}
-      className={`p-1.5 rounded hover:bg-white/10 transition-colors ${active ? 'bg-white/10 text-[#A78BFA]' : 'text-[#A3A3A3]'}`}
+      className="p-1.5 rounded hover:bg-white/10 transition-colors text-[#A3A3A3] hover:text-[#FAFAFA]"
     >
       {children}
     </button>
@@ -260,7 +307,7 @@ export function EmailTemplateEditor({ template }: EmailTemplateEditorProps) {
         <div className="flex items-center justify-between">
           <Label className="text-[#D4D4D4] flex items-center gap-2">
             <Variable className="h-4 w-4" />
-            Variaveis (clique para inserir no texto)
+            Variaveis
           </Label>
           <Button
             type="button"
@@ -276,77 +323,147 @@ export function EmailTemplateEditor({ template }: EmailTemplateEditorProps) {
 
         {/* Add variable form */}
         {showAddVar && (
-          <div className="flex items-end gap-2 p-3 bg-[#0F172A] rounded-lg border border-white/10">
-            <div className="flex-1 space-y-1">
-              <Label className="text-[#737373] text-xs">Identificador (ex: empresa)</Label>
-              <Input
-                value={newVarKey}
-                onChange={(e) => setNewVarKey(e.target.value)}
-                placeholder="nome_da_variavel"
-                className="bg-[#1E293B] border-white/10 text-[#FAFAFA] placeholder:text-[#525252] h-8 text-sm"
-              />
+          <div className="p-3 bg-[#0F172A] rounded-lg border border-white/10 space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              <div className="space-y-1">
+                <Label className="text-[#737373] text-xs">Identificador</Label>
+                <Input
+                  value={newVarKey}
+                  onChange={(e) => setNewVarKey(e.target.value)}
+                  placeholder="ex: evento"
+                  className="bg-[#1E293B] border-white/10 text-[#FAFAFA] placeholder:text-[#525252] h-8 text-sm"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[#737373] text-xs">Descricao</Label>
+                <Input
+                  value={newVarLabel}
+                  onChange={(e) => setNewVarLabel(e.target.value)}
+                  placeholder="ex: Nome do evento"
+                  className="bg-[#1E293B] border-white/10 text-[#FAFAFA] placeholder:text-[#525252] h-8 text-sm"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[#737373] text-xs">Valor padrao</Label>
+                <Input
+                  value={newVarValue}
+                  onChange={(e) => setNewVarValue(e.target.value)}
+                  placeholder="ex: Masterclass AI Company"
+                  className="bg-[#1E293B] border-white/10 text-[#FAFAFA] placeholder:text-[#525252] h-8 text-sm"
+                />
+              </div>
             </div>
-            <div className="flex-1 space-y-1">
-              <Label className="text-[#737373] text-xs">Descricao (ex: Nome da empresa)</Label>
-              <Input
-                value={newVarLabel}
-                onChange={(e) => setNewVarLabel(e.target.value)}
-                placeholder="Descricao da variavel"
-                className="bg-[#1E293B] border-white/10 text-[#FAFAFA] placeholder:text-[#525252] h-8 text-sm"
-              />
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => { setShowAddVar(false); setNewVarKey(''); setNewVarLabel(''); setNewVarValue('') }}
+                className="text-[#737373] hover:text-[#FAFAFA] h-8"
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={addCustomVariable}
+                className="bg-[#7C3AED] hover:bg-[#8B5CF6] text-white h-8"
+              >
+                <Plus className="h-3.5 w-3.5 mr-1" />
+                Criar variavel
+              </Button>
             </div>
-            <Button
-              type="button"
-              size="sm"
-              onClick={addCustomVariable}
-              className="bg-[#7C3AED] hover:bg-[#8B5CF6] text-white h-8 px-3"
-            >
-              Criar
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => { setShowAddVar(false); setNewVarKey(''); setNewVarLabel('') }}
-              className="text-[#737373] hover:text-[#FAFAFA] h-8 px-2"
-            >
-              <X className="h-4 w-4" />
-            </Button>
           </div>
         )}
 
-        {/* Variable badges */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {allVariables.map((v) => (
-            <div key={v.key} className="flex items-center gap-0.5 group">
+        {/* Variable list */}
+        <div className="space-y-2">
+          {variables.map((v) => (
+            <div key={v.key} className="flex items-center gap-2 p-2 bg-[#0F172A] rounded-lg border border-white/10 group">
+              {/* Variable badge - click to insert */}
               <Badge
                 onClick={() => insertVariable(v.key)}
-                className="bg-[#7C3AED]/15 text-[#A78BFA] border border-[#7C3AED]/30 text-xs cursor-pointer hover:bg-[#7C3AED]/25 transition-colors rounded-r-none"
+                className="bg-[#7C3AED]/15 text-[#A78BFA] border border-[#7C3AED]/30 text-xs cursor-pointer hover:bg-[#7C3AED]/25 transition-colors flex-shrink-0"
               >
-                {`{{${v.key}}}`} - {v.label}
+                {`{{${v.key}}}`}
               </Badge>
+
+              {/* Label */}
+              <span className="text-xs text-[#737373] flex-shrink-0">{v.label}</span>
+
+              {/* Value - editable */}
+              <div className="flex-1 flex items-center gap-1 min-w-0">
+                {editingVar === v.key ? (
+                  <>
+                    <Input
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && saveVarEdit()}
+                      placeholder="Valor da variavel..."
+                      className="bg-[#1E293B] border-white/10 text-[#FAFAFA] placeholder:text-[#525252] h-7 text-xs flex-1"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      onClick={saveVarEdit}
+                      className="p-1 rounded hover:bg-[#10B981]/20 text-[#10B981] transition-colors"
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingVar(null)}
+                      className="p-1 rounded hover:bg-white/10 text-[#737373] transition-colors"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-xs text-[#FAFAFA] truncate flex-1">
+                      {v.value || <span className="text-[#525252] italic">Sem valor (usa dados do contato)</span>}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => startEditingVar(v.key)}
+                      className="p-1 rounded hover:bg-white/10 text-[#525252] hover:text-[#A3A3A3] transition-colors opacity-0 group-hover:opacity-100"
+                      title="Editar valor"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {/* Delete button (only custom vars) */}
               {!v.builtin && (
                 <button
                   type="button"
-                  onClick={() => removeCustomVariable(v.key)}
-                  className="bg-[#F43F5E]/15 text-[#F43F5E] border border-[#F43F5E]/30 rounded-r-md px-1 py-0.5 hover:bg-[#F43F5E]/25 transition-colors opacity-0 group-hover:opacity-100"
-                  title={`Remover {{${v.key}}}`}
+                  onClick={() => removeVariable(v.key)}
+                  className="p-1 rounded hover:bg-[#F43F5E]/20 text-[#525252] hover:text-[#F43F5E] transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"
+                  title="Remover variavel"
                 >
-                  <X className="h-3 w-3" />
+                  <X className="h-3.5 w-3.5" />
                 </button>
               )}
             </div>
           ))}
+
           {/* Auto-detected variables not in the list */}
-          {detectedVars.filter(v => !allVariables.find(p => p.key === v)).map((v) => (
-            <Badge
-              key={v}
-              className="bg-[#0EA5E9]/15 text-[#0EA5E9] border border-[#0EA5E9]/30 text-xs"
-            >
-              {`{{${v}}}`} (detectada)
-            </Badge>
+          {detectedVars.filter(v => !variables.find(p => p.key === v)).map((v) => (
+            <div key={v} className="flex items-center gap-2 p-2 bg-[#0EA5E9]/5 rounded-lg border border-[#0EA5E9]/20">
+              <Badge className="bg-[#0EA5E9]/15 text-[#0EA5E9] border border-[#0EA5E9]/30 text-xs">
+                {`{{${v}}}`}
+              </Badge>
+              <span className="text-xs text-[#0EA5E9]/70">Detectada no texto</span>
+            </div>
           ))}
         </div>
+
+        <p className="text-[10px] text-[#525252]">
+          Clique na variavel para inserir no texto. Variaveis com valor fixo substituem o texto ao enviar.
+          Variaveis sem valor usam os dados do contato automaticamente.
+        </p>
       </div>
 
       {/* Editor */}
@@ -377,14 +494,13 @@ export function EmailTemplateEditor({ template }: EmailTemplateEditorProps) {
           <div className="rounded-xl border border-white/10 overflow-hidden">
             {/* Toolbar */}
             <div className="bg-[#0F172A] border-b border-white/10 px-3 py-2 flex items-center gap-1 flex-wrap">
-              {/* Text format */}
-              <ToolbarButton onClick={() => execCommand('bold')} title="Negrito">
+              <ToolbarButton onClick={() => execCommand('bold')} title="Negrito (Ctrl+B)">
                 <Bold className="h-4 w-4" />
               </ToolbarButton>
-              <ToolbarButton onClick={() => execCommand('italic')} title="Italico">
+              <ToolbarButton onClick={() => execCommand('italic')} title="Italico (Ctrl+I)">
                 <Italic className="h-4 w-4" />
               </ToolbarButton>
-              <ToolbarButton onClick={() => execCommand('underline')} title="Sublinhado">
+              <ToolbarButton onClick={() => execCommand('underline')} title="Sublinhado (Ctrl+U)">
                 <Underline className="h-4 w-4" />
               </ToolbarButton>
               <ToolbarButton onClick={() => execCommand('strikeThrough')} title="Tachado">
@@ -393,7 +509,6 @@ export function EmailTemplateEditor({ template }: EmailTemplateEditorProps) {
 
               <div className="w-px h-5 bg-white/10 mx-1" />
 
-              {/* Headings */}
               <ToolbarButton onClick={() => execCommand('formatBlock', 'h1')} title="Titulo">
                 <Heading1 className="h-4 w-4" />
               </ToolbarButton>
@@ -406,7 +521,6 @@ export function EmailTemplateEditor({ template }: EmailTemplateEditorProps) {
 
               <div className="w-px h-5 bg-white/10 mx-1" />
 
-              {/* Alignment */}
               <ToolbarButton onClick={() => execCommand('justifyLeft')} title="Alinhar esquerda">
                 <AlignLeft className="h-4 w-4" />
               </ToolbarButton>
@@ -419,7 +533,6 @@ export function EmailTemplateEditor({ template }: EmailTemplateEditorProps) {
 
               <div className="w-px h-5 bg-white/10 mx-1" />
 
-              {/* Lists */}
               <ToolbarButton onClick={() => execCommand('insertUnorderedList')} title="Lista">
                 <List className="h-4 w-4" />
               </ToolbarButton>
@@ -429,7 +542,6 @@ export function EmailTemplateEditor({ template }: EmailTemplateEditorProps) {
 
               <div className="w-px h-5 bg-white/10 mx-1" />
 
-              {/* Insert */}
               <ToolbarButton onClick={insertLink} title="Inserir link">
                 <Link className="h-4 w-4" />
               </ToolbarButton>
@@ -438,30 +550,28 @@ export function EmailTemplateEditor({ template }: EmailTemplateEditorProps) {
               </ToolbarButton>
               <button
                 type="button"
-                onClick={insertButton}
+                onMouseDown={(e) => { e.preventDefault(); insertButton() }}
                 title="Inserir botao CTA"
-                className="px-2 py-1 rounded hover:bg-white/10 text-[#A3A3A3] text-xs font-medium transition-colors"
+                className="px-2 py-1 rounded hover:bg-white/10 text-[#A3A3A3] hover:text-[#FAFAFA] text-xs font-medium transition-colors"
               >
                 + Botao
               </button>
 
               <div className="w-px h-5 bg-white/10 mx-1" />
 
-              {/* Undo/Redo */}
-              <ToolbarButton onClick={() => execCommand('undo')} title="Desfazer">
+              <ToolbarButton onClick={() => execCommand('undo')} title="Desfazer (Ctrl+Z)">
                 <Undo className="h-4 w-4" />
               </ToolbarButton>
-              <ToolbarButton onClick={() => execCommand('redo')} title="Refazer">
+              <ToolbarButton onClick={() => execCommand('redo')} title="Refazer (Ctrl+Y)">
                 <Redo className="h-4 w-4" />
               </ToolbarButton>
             </div>
 
-            {/* Content editable area */}
+            {/* Content editable area - NO dangerouslySetInnerHTML to fix cursor bug */}
             <div
               ref={editorRef}
               contentEditable
-              onInput={handleEditorInput}
-              dangerouslySetInnerHTML={{ __html: bodyHtml }}
+              onInput={syncEditorToState}
               className="min-h-[400px] p-6 bg-[#1E293B] text-[#FAFAFA] focus:outline-none [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:mb-4 [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:mb-3 [&_p]:text-base [&_p]:leading-relaxed [&_p]:mb-4 [&_p]:text-[#A3A3A3] [&_a]:text-[#A78BFA] [&_a]:underline [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:mb-4 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:mb-4 [&_li]:mb-1 [&_li]:text-[#A3A3A3] [&_hr]:border-white/10 [&_hr]:my-6 [&_.btn]:inline-block [&_.btn]:bg-gradient-to-r [&_.btn]:from-[#7C3AED] [&_.btn]:to-[#8B5CF6] [&_.btn]:text-white [&_.btn]:px-7 [&_.btn]:py-3.5 [&_.btn]:rounded-lg [&_.btn]:font-semibold [&_.btn]:no-underline [&_.btn]:my-4"
               suppressContentEditableWarning
             />
