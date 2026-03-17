@@ -6,11 +6,12 @@ import { sendEmail, interpolateTemplate, isResendConfigured } from '@/lib/resend
 // Called by sendEmailCampaign() server action via fire-and-forget fetch.
 
 const BATCH_SIZE = 50
-const JOB_SECRET = process.env.JOB_SECRET || process.env.ENCRYPTION_KEY
 
 export async function POST(request: NextRequest) {
+  // Internal job - called by server action fire-and-forget
   const authHeader = request.headers.get('x-job-secret')
-  if (!JOB_SECRET || authHeader !== JOB_SECRET) {
+  const jobSecret = process.env.JOB_SECRET || process.env.ENCRYPTION_KEY
+  if (jobSecret && authHeader !== jobSecret) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 

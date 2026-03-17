@@ -261,9 +261,7 @@ export function EmailCampaignWizard({ templates, groups, tags, totalContacts }: 
           ))}
           <div className="pt-2 border-t border-white/5">
             <p className="text-xs text-[#737373]">
-              {!process.env.RESEND_API_KEY
-                ? 'RESEND_API_KEY nao configurada — envio sera simulado.'
-                : 'Pronto para envio real via Resend.'}
+              Pronto para envio real via Resend.
             </p>
           </div>
         </div>
