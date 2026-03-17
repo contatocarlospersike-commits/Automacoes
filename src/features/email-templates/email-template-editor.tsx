@@ -10,7 +10,8 @@ import { toast } from 'sonner'
 import {
   Save, Eye, EyeOff, Loader2, Bold, Italic, Strikethrough,
   Underline, AlignLeft, AlignCenter, AlignRight, List, ListOrdered,
-  Link, Type, Variable, Heading1, Heading2, Minus, Undo, Redo
+  Link, Type, Variable, Heading1, Heading2, Minus, Undo, Redo,
+  Plus, X
 } from 'lucide-react'
 import { createEmailTemplate, updateEmailTemplate } from '@/features/email-templates/actions'
 import { extractVariables } from '@/lib/resend/client'
@@ -22,10 +23,10 @@ interface EmailTemplateEditorProps {
   template?: EmailTemplate
 }
 
-const VARIABLES = [
-  { key: 'name', label: 'Nome' },
-  { key: 'email', label: 'Email' },
-  { key: 'phone', label: 'Telefone' },
+const DEFAULT_VARIABLES = [
+  { key: 'name', label: 'Nome', builtin: true },
+  { key: 'email', label: 'Email', builtin: true },
+  { key: 'phone', label: 'Telefone', builtin: true },
 ]
 
 function wrapInEmailLayout(bodyHtml: string): string {
@@ -95,9 +96,38 @@ export function EmailTemplateEditor({ template }: EmailTemplateEditorProps) {
 
   const existingBody = template?.html_body ? extractBodyFromHtml(template.html_body) : DEFAULT_BODY
   const [bodyHtml, setBodyHtml] = useState(existingBody)
+  const [customVars, setCustomVars] = useState<Array<{ key: string; label: string }>>([])
+  const [newVarKey, setNewVarKey] = useState('')
+  const [newVarLabel, setNewVarLabel] = useState('')
+  const [showAddVar, setShowAddVar] = useState(false)
+
+  const allVariables = [...DEFAULT_VARIABLES, ...customVars.map(v => ({ ...v, builtin: false }))]
 
   const fullHtml = wrapInEmailLayout(bodyHtml)
   const detectedVars = extractVariables(fullHtml)
+
+  const addCustomVariable = useCallback(() => {
+    const key = newVarKey.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
+    const label = newVarLabel.trim()
+    if (!key) {
+      toast.error('Preencha o identificador da variavel')
+      return
+    }
+    if (allVariables.find(v => v.key === key)) {
+      toast.error('Essa variavel ja existe')
+      return
+    }
+    setCustomVars(prev => [...prev, { key, label: label || key }])
+    setNewVarKey('')
+    setNewVarLabel('')
+    setShowAddVar(false)
+    toast.success(`Variavel {{${key}}} criada`)
+  }, [newVarKey, newVarLabel, allVariables])
+
+  const removeCustomVariable = useCallback((key: string) => {
+    setCustomVars(prev => prev.filter(v => v.key !== key))
+    toast.success(`Variavel {{${key}}} removida`)
+  }, [])
 
   const execCommand = useCallback((command: string, value?: string) => {
     document.execCommand(command, false, value)
@@ -226,27 +256,94 @@ export function EmailTemplateEditor({ template }: EmailTemplateEditorProps) {
       </div>
 
       {/* Variables */}
-      <div className="space-y-2">
-        <Label className="text-[#D4D4D4] flex items-center gap-2">
-          <Variable className="h-4 w-4" />
-          Variaveis (clique para inserir no texto)
-        </Label>
-        <div className="flex items-center gap-2 flex-wrap">
-          {VARIABLES.map((v) => (
-            <Badge
-              key={v.key}
-              onClick={() => insertVariable(v.key)}
-              className="bg-[#7C3AED]/15 text-[#A78BFA] border border-[#7C3AED]/30 text-xs cursor-pointer hover:bg-[#7C3AED]/25 transition-colors"
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <Label className="text-[#D4D4D4] flex items-center gap-2">
+            <Variable className="h-4 w-4" />
+            Variaveis (clique para inserir no texto)
+          </Label>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowAddVar(!showAddVar)}
+            className="text-[#A78BFA] hover:text-[#FAFAFA] hover:bg-[#7C3AED]/10 text-xs"
+          >
+            <Plus className="h-3.5 w-3.5 mr-1" />
+            Nova variavel
+          </Button>
+        </div>
+
+        {/* Add variable form */}
+        {showAddVar && (
+          <div className="flex items-end gap-2 p-3 bg-[#0F172A] rounded-lg border border-white/10">
+            <div className="flex-1 space-y-1">
+              <Label className="text-[#737373] text-xs">Identificador (ex: empresa)</Label>
+              <Input
+                value={newVarKey}
+                onChange={(e) => setNewVarKey(e.target.value)}
+                placeholder="nome_da_variavel"
+                className="bg-[#1E293B] border-white/10 text-[#FAFAFA] placeholder:text-[#525252] h-8 text-sm"
+              />
+            </div>
+            <div className="flex-1 space-y-1">
+              <Label className="text-[#737373] text-xs">Descricao (ex: Nome da empresa)</Label>
+              <Input
+                value={newVarLabel}
+                onChange={(e) => setNewVarLabel(e.target.value)}
+                placeholder="Descricao da variavel"
+                className="bg-[#1E293B] border-white/10 text-[#FAFAFA] placeholder:text-[#525252] h-8 text-sm"
+              />
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              onClick={addCustomVariable}
+              className="bg-[#7C3AED] hover:bg-[#8B5CF6] text-white h-8 px-3"
             >
-              {`{{${v.key}}}`} - {v.label}
-            </Badge>
+              Criar
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => { setShowAddVar(false); setNewVarKey(''); setNewVarLabel('') }}
+              className="text-[#737373] hover:text-[#FAFAFA] h-8 px-2"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
+
+        {/* Variable badges */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {allVariables.map((v) => (
+            <div key={v.key} className="flex items-center gap-0.5 group">
+              <Badge
+                onClick={() => insertVariable(v.key)}
+                className="bg-[#7C3AED]/15 text-[#A78BFA] border border-[#7C3AED]/30 text-xs cursor-pointer hover:bg-[#7C3AED]/25 transition-colors rounded-r-none"
+              >
+                {`{{${v.key}}}`} - {v.label}
+              </Badge>
+              {!v.builtin && (
+                <button
+                  type="button"
+                  onClick={() => removeCustomVariable(v.key)}
+                  className="bg-[#F43F5E]/15 text-[#F43F5E] border border-[#F43F5E]/30 rounded-r-md px-1 py-0.5 hover:bg-[#F43F5E]/25 transition-colors opacity-0 group-hover:opacity-100"
+                  title={`Remover {{${v.key}}}`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
           ))}
-          {detectedVars.filter(v => !VARIABLES.find(p => p.key === v)).map((v) => (
+          {/* Auto-detected variables not in the list */}
+          {detectedVars.filter(v => !allVariables.find(p => p.key === v)).map((v) => (
             <Badge
               key={v}
               className="bg-[#0EA5E9]/15 text-[#0EA5E9] border border-[#0EA5E9]/30 text-xs"
             >
-              {`{{${v}}}`}
+              {`{{${v}}}`} (detectada)
             </Badge>
           ))}
         </div>
